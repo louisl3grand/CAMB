@@ -9,7 +9,7 @@ class SourceWindow(F2003Class):
 
     Note that source windows can currently only be used in flat models.
     """
-    _fields_ = [("source_type", c_int, {"names": ["21cm", "counts", "lensing"], "start": 1}),
+    _fields_ = [("source_type", c_int, {"names": ["21cm", "counts", "lensing", "arf"], "start": 1}),
                 ("bias", c_double),
                 ("dlog10Ndm", c_double)]
 
@@ -56,9 +56,8 @@ class SplinedSourceWindow(SourceWindow):
             raise ValueError(
                 "Redshifts must be well sampled and in ascending order, with window function the same length as z")
         if bias_z is not None:
-            bias_z = np.ascontiguousarray(bias_z, dtype=np.float64)
+            bias_z = np.asarray(bias_z, dtype=np.float64)
             if len(bias_z) != len(z):
                 raise ValueError("bias array must be same size as the redshift array")
 
-        self.f_SetTable(byref(c_int(len(z))), np.ascontiguousarray(z, dtype=np.float64),
-                        np.ascontiguousarray(W, dtype=np.float64), bias_z)
+        self.f_SetTable(byref(c_int(len(z))), np.asarray(z, dtype=np.float64), np.asarray(W, dtype=np.float64), bias_z)

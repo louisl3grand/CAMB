@@ -462,13 +462,13 @@
                 n2 = State%TimeSteps%npoints - 1
             else
                 n1 = State%TimeSteps%IndexOf(W%tau_start)
-                if (W%kind == window_lensing .or. W%kind == window_counts &
+                if (W%kind == window_lensing .or. (W%kind == window_counts .or. W%kind == window_arf) & ! ARF
                     .and. CP%SourceTerms%counts_lensing) then
                     n2 = State%TimeSteps%npoints - 1
                 else
                     n2 = min(State%TimeSteps%npoints - 1, State%TimeSteps%IndexOf(W%tau_end))
                 end if
-                if (W%kind == window_counts .and. CP%SourceTerms%counts_lensing) then
+                if ( (W%kind == window_counts .or. W%kind == window_arf) .and. CP%SourceTerms%counts_lensing) then ! ARF
                     s_ix_lens = 3 + W%mag_index + State%num_redshiftwindows
                 end if
             end if
@@ -753,8 +753,7 @@
     if (allocated(ThisSources%LinearSrc)) &
         deallocate(ThisSources%LinearSrc)
     allocate(ThisSources%LinearSrc(ThisSources%Evolve_q%npoints,&
-        ThisSources%SourceNum,State%TimeSteps%npoints), source=0._dl, stat=err)
-    if (err/=0) call GlobalError('Sources requires too much memory to allocate', error_unsupported_params)                                                                               
+        ThisSources%SourceNum,State%TimeSteps%npoints), source=0._dl)
 
     end subroutine GetSourceMem
 
@@ -2259,8 +2258,9 @@
                             if (w_ix>3) then
                                 associate (Win => State%Redshift_w(w_ix - 3))
                                     if (Win%kind == window_lensing) &
-                                        Delta1 = Delta1 / 2 * ell * (ell + 1)
-                                    if (Win%kind == window_counts .and. CP%SourceTerms%counts_lensing) then
+                                        Delta1 = Delta1 / 2 * ell * (ell + 1) 
+                                    if ( (Win%kind == window_counts .or. Win%kind == window_arf) & ! ARF
+                                    		& .and. CP%SourceTerms%counts_lensing) then
                                         !want delta f/f - 2kappa;
                                         ! grad^2 = -l(l+1);
                                         Delta1 = Delta1 + ell * (ell + 1) * &
@@ -2282,7 +2282,8 @@
                                     associate (Win => State%Redshift_w(w_ix2 - 3))
                                         if (Win%kind == window_lensing) &
                                             Delta2 = Delta2 / 2 * ell * (ell + 1)
-                                        if (Win%kind == window_counts .and. CP%SourceTerms%counts_lensing) then
+                                        if ( (Win%kind == window_counts .or. Win%kind == window_arf) & ! ARF
+                                        	&  	.and. CP%SourceTerms%counts_lensing) then
                                             !want delta f/f - 2kappa;
                                             ! grad^2 = -l(l+1);
                                             Delta2 = Delta2 + ell * (ell + 1) * &

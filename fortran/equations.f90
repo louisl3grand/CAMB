@@ -13,12 +13,8 @@
 
     !  8*pi*G*rho*a**4.
     grhoa2 = this%grho_no_de(a) +  grhov_t * a**2
-    if (grhoa2 <= 0) then
-        call GlobalError('Universe stops expanding before today (recollapse not supported)', error_unsupported_params)
-        dtauda = 0
-    else
-        dtauda = sqrt(3 / grhoa2)
-    end if
+
+    dtauda = sqrt(3 / grhoa2)
 
     end function dtauda
 
@@ -1387,12 +1383,86 @@
             k*(z+vb)/adotoa/3)
     end if
 
-    do w_ix = 1, State%num_redshiftwindows
+    do w_ix = 1, State%num_redshiftwindows 
         associate (W => State%Redshift_W(w_ix))
 
             if (W%kind == window_lensing) then
                 sources(3+w_ix) =-2*phi*W%win_lens(j)
-            elseif (W%kind == window_counts) then
+            elseif (W%kind == window_arf) then ![CHM] modified section for ARF
+                !assume zero velocity bias and relevant tracer is CDM perturbation
+                !neglect anisotropic stress in some places
+
+                !Main density source
+                if (CP%SourceTerms%counts_density) then
+                    counts_density_source= (1/a -1 - W%z_prom) *  W%wing(j)*(clxc*W%Window%GetBias(k,a) + &
+                    (W%comoving_density_ev(j) - 3*adotoa)*sigma/k)
+                    !Newtonian gauge count density; bias assumed to be on synchronous gauge CDM density
+                else
+                    counts_density_source= 0
+                endif
+
+                if (CP%SourceTerms%counts_redshift) then
+                    !Main redshift distortion from kV_N/H j'' integrated by parts twice (V_N = sigma in synch gauge)
+                    counts_redshift_source = (1/a -1 - W%z_prom) *  (((4.D0*adotoa**2+gpres+grho/3.D0)/k*W%wing2(j)+ &
+                        (-4.D0*W%dwing2(j)*adotoa+W%ddwing2(j))/k)*sigma+(-etak/adotoa*k/3.D0-dgrho/ &
+                        adotoa/6.D0+(etak/adotoa*k/3.D0+dgrho/adotoa/6.D0+(dgq/2.D0-2.D0*etak*adotoa)/k) &
+                        /EV%Kf(1))*W%wing2(j)+2.D0*W%dwing2(j)*etak/k/EV%Kf(1)) + 1.D0/k/a * &
+                        ((5.D0*adotoa*sigma - 2.D0*etak)*W%wing(j) - 2.D0*adotoa*sigma*W%dwing2(j) + &
+                         sigma*(grho + 3.D0*gpres)/6.D0/adotoa*W%wing(j))
+                else
+                    counts_redshift_source= 0
+                end if
+
+                ! 2v j'/(H\chi) geometric term
+                if (State%tau0-tau > 0.1_dl .and. CP%SourceTerms%counts_radial) then
+                    chi =State%tau0-tau
+                    counts_radial_source= (1/a -1 - W%z_prom) *  ((1-2.5*W%Window%dlog10Ndm)*((-4.D0*W%wing2(j)/chi*adotoa &
+                    -2.D0*(-W%dwing2(j)*chi-W%wing2(j))/chi**2)/ &
+                    k*sigma+2.D0*W%wing2(j)*etak/chi/k/EV%Kf(1))) - (1-2.5*W%Window%dlog10Ndm)*2*W%wing2(j)*sigma*adotoa/(k*chi*a)
+                else
+                    counts_radial_source = 0
+                end if
+
+                if (CP%SourceTerms%counts_timedelay) then
+                    !time delay; WinV is int g/chi
+                    counts_timedelay_source=   2*(1-2.5*W%Window%dlog10Ndm)*W%WinV(j)*2*phi
+                else
+                    counts_timedelay_source = 0
+                end if
+
+                if (CP%SourceTerms%counts_ISW) then
+                    !WinF is int wingtau
+                    counts_ISW_source = 2*phidot* W%WinF(j)
+                else
+                    counts_ISW_source = 0
+                end if
+
+                if (CP%SourceTerms%counts_potential) then
+                    !approx phi = psi
+                    counts_potential_source = (1/a -1 - W%z_prom) * (( phidot/adotoa + phi +(5*W%Window%dlog10Ndm-2)*phi ) * W%wing(j) &
+                    + phi * W%wingtau(j))
+                else
+                    counts_potential_source = 0
+                end if
+
+                if (CP%SourceTerms%counts_velocity) then
+                    counts_velocity_source = (1/a -1 - W%z_prom) *  ((-2.D0*W%wingtau(j)*adotoa+W%dwingtau(j))/k*sigma &
+                    +W%wingtau(j)*etak/k/EV%Kf(1)) - adotoa/a*W%wingtau(j)*sigma/k &
+                    - counts_radial_source  !don't double count terms; counts_radial is part of counts_velocity with 1/H/chi
+                else
+                    counts_velocity_source = 0
+                end if
+
+                sources(3+w_ix)=  counts_radial_source +  counts_density_source + counts_redshift_source &
+                    + counts_timedelay_source + counts_potential_source &
+                    + counts_ISW_source + counts_velocity_source
+
+                sources(3+w_ix)=sources(3+w_ix)/W%Fq
+
+                if (CP%SourceTerms%counts_lensing) &
+                    sources(3+W%mag_index+State%num_redshiftwindows) = phi*W%win_lensZ(j)*(2-5*W%Window%dlog10Ndm)
+
+            elseif (W%kind == window_counts) then ![CHM] original ADF part
                 !assume zero velocity bias and relevant tracer is CDM perturbation
                 !neglect anisotropic stress in some places
 

@@ -4,14 +4,14 @@
     use MpiUtils
     implicit none
 
-    integer, parameter :: window_21cm = 1, window_counts = 2, window_lensing = 3
+    integer, parameter :: window_21cm = 1, window_counts = 2, window_lensing = 3, window_arf = 4 !declares parameters [CHM] We have included window_arf
 
-    Type, extends(TPythonInterfacedClass) :: TSourceWindow
+    Type, extends(TPythonInterfacedClass) :: TSourceWindow !line 45 classes.f90----extends inherits another type
         integer :: source_type = window_counts
-        real(dl) :: bias = 1._dl
+        real(dl) :: bias = 1._dl !array
         real(dl) :: dlog10Ndm = 0._dl
-    contains
-    procedure :: count_obs_window_z
+    contains ! binds a procedure to a type
+    procedure :: count_obs_window_z ! PROCEDURE [ (interface-name) ] [ [ , binding-attr-list ] :: ] binding-name [ => procedure-name ]
     procedure :: Window_f_a
     procedure :: counts_background_z
     procedure :: GetScales
@@ -71,12 +71,14 @@
         class(TSourceWindow), pointer :: Window => null()
         integer kind
         real(dl) Redshift
+        real(dl) z_prom !ARF
         real(dl) tau, tau_start, tau_end, tau_peakstart, tau_peakend
         real(dl) sigma_tau !approx width in conformal time (set by code)
         real(dl) chi0, chimin
         integer :: mag_index =0 !The index into the extra sources used for adding magnification to counts
         real(dl), dimension(:), allocatable :: winF, wing,wing2,wingtau,dwing,dwing2,dwingtau,ddwing,ddwing2,ddwingtau,&
             winV,dwinV,ddwinV, win_lens, comoving_density_ev
+        real(dl), dimension(:), allocatable :: wingZ,ddwingZ,WinFZ,WinF2,wingtauZ,win_lensZ !ARF
         real(dl) Fq, optical_depth_21
         logical has_lensing_window
     end Type TRedWin
@@ -98,7 +100,7 @@
     !if counts_evolve = T this function is used to get n(z) for the source population
     !(not the same as the number actually observed)
     class(TSourceWindow) :: this
-    real(dl), intent(in) :: z
+    real(dl), intent(in) :: z ! It indicates that an argument will receives some input from outside of the function and its value can't be changed within the function.
     real(dl) counts_background_z, winamp
 
     counts_background_z = this%count_obs_window_z(z, winamp)
@@ -108,20 +110,20 @@
 
     subroutine GetScales(this, zpeak, sigma_z, zpeakstart, zpeakend)
     class(TSourceWindow) :: this
-    real(dl), intent(out) :: zpeak, sigma_z, zpeakstart, zpeakend
+    real(dl), intent(out) :: zpeak, sigma_z, zpeakstart, zpeakend !pass a computation result back outside of the soubroutine.
 
     zpeak=0
     sigma_z=0
     zpeakstart=0
     zpeakend=0
-    call MpiStop('Must define GetScales function')
+    call MpiStop('Must define GetScales function') !calls a subroutine
 
     end subroutine GetScales
 
     real(dl) function GetBias(this,k,a)
     class(TSourceWindow) :: this
     real(dl), intent(in) :: k,a
-    GetBias = this%Bias !Simplest scale-independent and time independent model
+    GetBias = this%Bias !Simplest scale-independent and time independent model ---- %: way to access to a variable that is internal to a module.
     end function
 
     function Window_f_a(this, a, winamp)

@@ -68,6 +68,7 @@
         real(dl), dimension(:), allocatable :: emmu, dcs2,demmu, ddotmu, dddotmu, ddddotmu
         real(dl), dimension(:), allocatable :: ScaleFactor, dScaleFactor, adot, dadot
         real(dl), dimension(:), allocatable :: winlens, dwinlens
+        real(dl), dimension(:), allocatable :: winlensZ, dwinlensZ ! ARF
         real(dl) tauminn,dlntau
         real(dl) :: tight_tau, actual_opt_depth
         !Times when 1/(opacity*tau) = 0.01, for use switching tight coupling approximation
@@ -97,6 +98,8 @@
     !Sources
     Type CalWins
         real(dl), allocatable :: awin_lens(:),  dawin_lens(:)
+        real(dl), allocatable :: awin_lensZ(:), dawin_lensZ(:) ! ARF
+        real(dl) :: z_prom ! ARF
     end Type CalWins
 
     Type LimberRec
@@ -373,7 +376,7 @@
             if (sum(this%CP%Nu_mass_numbers(1:this%CP%Nu_mass_eigenstates))/=0) &
                 call GlobalError('Num_Nu_Massive is not sum of Nu_mass_numbers', error_unsupported_params)
         end if
-10      if (this%CP%Omnuh2 < 1.e-7_dl) this%CP%Omnuh2 = 0
+        if (this%CP%Omnuh2 < 1.e-7_dl) this%CP%Omnuh2 = 0
         if (this%CP%Omnuh2==0 .and. this%CP%Num_Nu_Massive /=0) then
             if (this%CP%share_delta_neff) then
                 this%CP%Num_Nu_Massless = this%CP%Num_Nu_Massless + this%CP%Num_Nu_Massive
@@ -479,19 +482,12 @@
                 this%nu_masses(nu_i)= ThermalNuBackground%find_nu_mass_for_rho(this%CP%omnuh2/h2*this%CP%Nu_mass_fractions(nu_i)&
                     *this%grhocrit/this%grhormass(nu_i))
             end do
-            if (all(this%nu_masses(1:this%CP%Nu_mass_eigenstates)==0)) then
-                !All density accounted for by massless, so just use massless
-                this%CP%Omnuh2 = 0
-                goto 10
-            end if
-            !Just prevent divide by zero
-            this%nu_masses(1:this%CP%Nu_mass_eigenstates) = max(this%nu_masses(1:this%CP%Nu_mass_eigenstates),1e-3_dl)
         else
             this%nu_masses = 0
         end if
         call this%CP%DarkEnergy%Init(this)
-        if (global_error_flag==0) this%tau0=this%TimeOfz(0._dl)
         if (global_error_flag==0) then
+            this%tau0=this%TimeOfz(0._dl)
             this%chi0=this%rofChi(this%tau0/this%curvature_radius)
             this%scale= this%chi0*this%curvature_radius/this%tau0  !e.g. change l sampling depending on approx peak spacing
             if (this%closed .and. this%tau0/this%curvature_radius >3.14) then
@@ -538,7 +534,7 @@
             !$OMP CRITICAL
             this%CP%Max_eta_k = max(this%CP%Max_eta_k, this%tau0*WindowKmaxForL(Win,this%CP,this%CP%max_l))
             if (Win%Window%source_type==window_21cm) this%CP%Do21cm = .true.
-            if (Win%Window%source_type==window_counts .and. P%SourceTerms%counts_lensing) then
+            if ( (Win%Window%source_type==window_counts .or. Win%Window%source_type==window_arf) .and. P%SourceTerms%counts_lensing) then
                 this%num_extra_redshiftwindows = this%num_extra_redshiftwindows + 1
                 Win%mag_index = this%num_extra_redshiftwindows
             end if
@@ -893,12 +889,11 @@
     function CAMBdata_get_zstar(this)
     class(CAMBdata) :: this
     real(dl) CAMBdata_get_zstar
-    real(dl) z_scale
 
     call this%CP%Recomb%Init(this)
-    z_scale =  COBE_CMBTemp/this%CP%TCMB
-    CAMBdata_get_zstar=this%binary_search(noreion_optdepth, 1.d0, 700.d0*z_scale, &
-        2000.d0*z_scale, 1d-3*z_scale,100.d0*z_scale,5000.d0*z_scale)
+
+    CAMBdata_get_zstar=this%binary_search(noreion_optdepth, 1.d0, 700.d0, 2000.d0, &
+        1d-3,100.d0,5000.d0)
 
     end function CAMBdata_get_zstar
 
@@ -1022,7 +1017,7 @@
             allocate(this%transfer_redshifts(this%num_transfer_redshifts))
             this%transfer_redshifts = P%PK_redshifts(:this%num_transfer_redshifts)
             this%PK_redshifts_index(:this%num_transfer_redshifts) = (/ (i, i=1, this%num_transfer_redshifts ) /)
-        else
+        else 
             i=0
             iPK=1
             iNLL=1
@@ -1229,7 +1224,7 @@
     end if
 
     end function grho_no_de
-
+    
     function GetReionizationOptDepth(this)
     class(CAMBdata) :: this
     real(dl) GetReionizationOptDepth
@@ -1681,16 +1676,18 @@
     real(dl) tau01,a0,barssc,dtau
     real(dl) tau,a,a2
     real(dl) adot,fe,thomc0
-    real(dl) dtbdla,vfi,cf1,maxvis, vis, z_scale
+    real(dl) dtbdla,vfi,cf1,maxvis, vis
     integer ncount,i,j1,iv,ns
     real(dl), allocatable :: spline_data(:)
     real(dl) last_dotmu, om
     real(dl) a_verydom
     real(dl) awin_lens1p,awin_lens2p,dwing_lens, rs, DA
+    real(dl) awin_lens1pZ,awin_lens2pZ! ARF
     real(dl) a_eq, rs_eq, tau_eq, rstar
     integer noutput
     Type(CalWins), dimension(:), allocatable, target :: RW
     real(dl) awin_lens1(State%num_redshiftwindows),awin_lens2(State%num_redshiftwindows)
+    real(dl) awin_lens1Z(State%num_redshiftwindows),awin_lens2Z(State%num_redshiftwindows) ! ARF
     real(dl) Tspin, Trad, rho_fac, window, tau_eps
     integer transfer_ix(State%CP%Transfer%PK_num_redshifts)
     integer RW_i, j2
@@ -1738,6 +1735,7 @@
         deallocate(this%tb, this%xe, this%emmu, this%dotmu)
         deallocate(this%demmu, this%dddotmu, this%ddddotmu)
         if (dowinlens .and. allocated(this%winlens)) deallocate(this%winlens, this%dwinlens)
+        if (dowinlens .and. allocated(this%winlensZ)) deallocate(this%winlensZ, this%dwinlensZ) ! ARF
     endif
     if (.not. allocated(this%tb)) then
         allocate(this%scaleFactor(nthermo), this%cs2(nthermo), this%dcs2(nthermo), this%ddotmu(nthermo))
@@ -1745,6 +1743,7 @@
         allocate(this%tb(nthermo), this%xe(nthermo), this%emmu(nthermo),this%dotmu(nthermo))
         allocate(this%demmu(nthermo), this%dddotmu(nthermo), this%ddddotmu(nthermo))
         if (dowinlens) allocate(this%winlens(nthermo), this%dwinlens(nthermo))
+        if (dowinlens) allocate(this%winlensZ(nthermo), this%dwinlensZ(nthermo)) ! ARF
     end if
 
     if (State%num_redshiftwindows >0) then
@@ -1758,9 +1757,12 @@
         associate (RedWin => State%Redshift_w(RW_i))
             RedWin%tau_start = 0
             RedWin%tau_end = State%tau0
-            if (RedWin%kind == window_lensing .or.  RedWin%kind == window_counts .and. CP%SourceTerms%counts_lensing) then
+            if (RedWin%kind == window_lensing .or.  (RedWin%kind == window_counts .or. RedWin%kind == window_arf) & ! [CHM] include arf
+             		& .and. CP%SourceTerms%counts_lensing) then
                 allocate(RW(RW_i)%awin_lens(nthermo))
                 allocate(RW(RW_i)%dawin_lens(nthermo))
+                allocate(RW(RW_i)%awin_lensZ(nthermo)) ! ARF
+                allocate(RW(RW_i)%dawin_lensZ(nthermo)) ! ARF
             end if
         end associate
     end do
@@ -1788,6 +1790,8 @@
     !Do other stuff while recombination calculating
     awin_lens1=0
     awin_lens2=0
+    awin_lens1Z=0 ! ARF
+    awin_lens2Z=0 ! ARF
     transfer_ix =0
 
     call splini(spline_data,nthermo)
@@ -1869,15 +1873,20 @@
                     if (a > 1d-4) then
                         window = RedWin%Window%Window_f_a(a, winamp)
 
-                        if  (RedWin%kind == window_lensing .or.  RedWin%kind == window_counts  &
+                        if  (RedWin%kind == window_lensing .or.  (RedWin%kind == window_counts .or. RedWin%kind == window_arf )  & ! [CHM] include arf
                             .and. CP%SourceTerms%counts_lensing) then
                             if (State%tau0 - tau > 2) then
                                 dwing_lens =  adot * window *dtau
                                 awin_lens1(RW_i) = awin_lens1(RW_i) + dwing_lens
                                 awin_lens2(RW_i) = awin_lens2(RW_i) + dwing_lens/(State%tau0-tau)
                                 Win%awin_lens(i) = awin_lens1(RW_i)/(State%tau0-tau) - awin_lens2(RW_i)
+                                ! ARF:
+                                awin_lens1Z(RW_i) = awin_lens1Z(RW_i) + dwing_lens*z
+                                awin_lens2Z(RW_i) = awin_lens2Z(RW_i) + dwing_lens*z/(State%tau0-tau)
+                                Win%awin_lensZ(i) = awin_lens1Z(RW_i)/(State%tau0-tau) - awin_lens2Z(RW_i)
                             else
                                 Win%awin_lens(i) = 0
+                                Win%awin_lensZ(i) = 0 ! ARF
                             end if
                         end if
 
@@ -1889,9 +1898,10 @@
                                 RW_i, RedWin%tau_start, RedWin%tau_end)
                         end if
                     else
-                        if (RedWin%kind == window_lensing .or.  RedWin%kind == window_counts &
+                        if (RedWin%kind == window_lensing .or.  (RedWin%kind == window_counts .or. RedWin%kind == window_arf)&
                             .and. CP%SourceTerms%counts_lensing) then
                             Win%awin_lens(i)=0
+                            Win%awin_lensZ(i) = 0 ! ARF
                         end if
                     end if
                 end associate
@@ -1909,11 +1919,15 @@
     do RW_i = 1, State%num_redshiftwindows
         associate(Win => RW(RW_i))
             if (State%Redshift_w(RW_i)%kind == window_lensing .or. &
-                State%Redshift_w(RW_i)%kind == window_counts .and. CP%SourceTerms%counts_lensing) then
+                (State%Redshift_w(RW_i)%kind == window_counts .or. State%Redshift_w(RW_i)%kind == window_arf) &
+                	& .and. CP%SourceTerms%counts_lensing) then
                 this%has_lensing_windows = .true.
                 State%Redshift_w(RW_i)%has_lensing_window = .true.
                 if (FeedbackLevel>0)  write(*,'(I1," Int W              = ",f9.6)') RW_i, awin_lens1(RW_i)
                 Win%awin_lens=Win%awin_lens/awin_lens1(RW_i)
+                Win%z_prom=awin_lens1Z(RW_i)/awin_lens1(RW_i) ! ARF
+                Win%awin_lensZ=Win%awin_lensZ-Win%awin_lens*Win%z_prom! ARF
+                Win%awin_lensZ=Win%awin_lensZ/awin_lens1(RW_i) ! ARF
             else
                 State%Redshift_w(RW_i)%has_lensing_window = .false.
             end if
@@ -2013,9 +2027,8 @@
             end if
         end if
     end do
-    z_scale =  COBE_CMBTemp/CP%TCMB
-    zstar_min = 700._dl * z_scale
-    zstar_max = 2000._dl * z_scale
+    zstar_min = 700._dl
+    zstar_max = 2000._dl
     if ((.not. CP%Reion%Reionization .or. CP%Accuracy%AccurateReionization) .and. CP%WantDerivedParameters) then
         do j1=nint(log(100/this%tauminn)/this%dlntau),nthermo
             if (-sdotmu(j1) - this%actual_opt_depth < 1) then
@@ -2084,7 +2097,10 @@
         vfi=0
         awin_lens1p=0
         awin_lens2p=0
-        this%winlens=0
+        awin_lens1pZ=0 ! ARF
+        awin_lens2pZ=0 ! ARF
+        this%winlens=0 
+        this%winlensZ=0 ! ARF
         do j1=1,nthermo-1
             vis = this%emmu(j1)*this%dotmu(j1)
             tau = this%tauminn* taus(j1)
@@ -2094,6 +2110,7 @@
 
                 awin_lens1p = awin_lens1p + dwing_lens
                 awin_lens2p = awin_lens2p + dwing_lens/(State%tau0-tau)
+                              
             end if
             this%winlens(j1)= awin_lens1p/(State%tau0-tau) - awin_lens2p
         end do
@@ -2121,15 +2138,15 @@
     call splder(this%dddotmu,this%ddddotmu,nthermo,spline_data)
     if (CP%want_zstar .or. CP%WantDerivedParameters) &
         this%z_star = State%binary_search(noreion_optdepth, 1.d0, zstar_min, zstar_max, &
-        & 1d-3/background_boost, 100._dl*z_scale, 4000._dl*z_scale)
+        & 1d-3/background_boost, 100._dl, 4000._dl)
     !$OMP SECTION
     call splder(this%cs2,this%dcs2,nthermo,spline_data)
     call splder(this%emmu,this%demmu,nthermo,spline_data)
     call splder(this%adot,this%dadot,nthermo,spline_data)
     if (dowinlens) call splder(this%winlens,this%dwinlens,nthermo,spline_data)
     if (CP%want_zdrag .or. CP%WantDerivedParameters) &
-        this%z_drag = State%binary_search(dragoptdepth, 1.d0, 800*z_scale, &
-        & max(zstar_max*1.1_dl,1200._dl*z_scale), 2d-3/background_boost, 100.d0*z_scale, 4000._dl*z_scale)
+        this%z_drag = State%binary_search(dragoptdepth, 1.d0, 800.d0, &
+        & max(zstar_max*1.1_dl,1200._dl), 2d-3/background_boost, 100.d0, 4000._dl)
     !$OMP SECTION
     this%ScaleFactor(:) = this%scaleFactor/taus !a/tau
     this%dScaleFactor(:) = (this%adot - this%ScaleFactor)*this%dlntau !derivative of a/tau
@@ -2140,6 +2157,7 @@
         do j2 = 1, State%num_redshiftwindows
             if (State%Redshift_w(j2)%has_lensing_window) then
                 call splder(RW(j2)%awin_lens,RW(j2)%dawin_lens,nthermo,spline_data)
+                call splder(RW(j2)%awin_lensZ,RW(j2)%dawin_lensZ,nthermo,spline_data)
             end if
         end do
     end if
@@ -2369,9 +2387,12 @@
             associate (Win => State%Redshift_W(i))
                 allocate(Win%winF(nstep),Win%wing(nstep),Win%dwing(nstep),Win%ddwing(nstep), &
                     Win%winV(nstep),Win%dwinV(nstep),Win%ddwinV(nstep))
+            !ARF
+                allocate(Win%wingZ(nstep),Win%ddwingZ(nstep),Win%WinFZ(nstep),Win%WinF2(nstep),Win%wingtauZ(nstep),Win%win_lensZ(nstep))
+            !ARF ___
                 allocate(Win%win_lens(nstep),Win%wing2(nstep),Win%dwing2(nstep),Win%ddwing2(nstep))
                 allocate(Win%wingtau(nstep),Win%dwingtau(nstep),Win%ddwingtau(nstep))
-                if (Win%kind == window_counts) then
+                if (Win%kind == window_counts .or. Win%kind == window_arf) then
                     allocate(Win%comoving_density_ev(nstep))
                 end if
             end associate
@@ -2394,8 +2415,10 @@
     real(dl) z,rhos, adot, exp_fac
     real(dl) tmp(TimeSteps%npoints), tmp2(TimeSteps%npoints), hubble_tmp(TimeSteps%npoints)
     real(dl), allocatable , dimension(:,:) :: int_tmp, back_count_tmp
+    real(dl), allocatable , dimension(:,:) :: int_tmpZ ! ARF
     integer ninterp
-
+    
+    
     ! Prevent false positive warnings for uninitialized
     Tspin = 0._dl
     Trad = 0._dl
@@ -2421,17 +2444,23 @@
             RedWin%dwingtau=0
             RedWin%ddwingtau=0
             RedWin%Fq = 0
-            if (RedWin%kind == window_counts) then
+            RedWin%WinF2 = 0 !ARF
+            RedWin%wingZ = 0 !ARF
+            RedWin%ddwingZ = 0 !ARF
+            RedWin%WinFZ = 0 !ARF
+            RedWin%wingtauZ = 0 !ARF
+            if (RedWin%kind == window_counts .or. RedWin%kind == window_arf) then
                 RedWin%comoving_density_ev  = 0
             end if
         end associate
     end do
-
     allocate(int_tmp(jstart:TimeSteps%npoints,State%num_redshiftwindows))
     int_tmp = 0
+    allocate(int_tmpZ(jstart:TimeSteps%npoints,State%num_redshiftwindows)) ! ARF
+    int_tmpZ = 0 ! ARF
     allocate(back_count_tmp(jstart:TimeSteps%npoints,State%num_redshiftwindows))
-    back_count_tmp = 0
-
+    back_count_tmp = 0   
+    
     do j=jstart, TimeSteps%npoints
         tau = TimeSteps%points(j)
         z = this%step_redshift(j)
@@ -2457,27 +2486,15 @@
                 if (tau < RedWin%tau_start) cycle
 
                 window = RedWin%Window%Window_f_a(a, winamp)
-
-                if (RedWin%kind == window_21cm) then
-                    rhos = rho_fac*(1 - Trad/Tspin)
-
-                    !Want to integrate this...
-                    int_tmp(j,i) = this%drhos_fac(j)*a*window
-
-                    RedWin%WinV(j) = -exp(-tau_eps)*a2*rhos*window/(adot/a)
-
-                    RedWin%wing(j) = exp_fac*a2*rhos*window
-
-                    !The window that doesn't go to zero at T_s = T_gamma
-                    RedWin%wing2(j) = exp_fac*a2*rho_fac*Trad/Tspin*window
-
-                    !Window for tau_s for the self-absoption term
-                    RedWin%wingtau(j) =  RedWin%wing(j)*(1 - exp(-tau_eps)/exp_fac)
-                elseif (RedWin%kind == window_counts) then
+                !
+		if ( (RedWin%kind == window_counts) .or. (RedWin%kind == window_arf) ) then ![CHM] counts or arf
 
                     !window is n(a) where n is TOTAL not fractional number
                     !delta = int wing(eta) delta(eta) deta
                     RedWin%wing(j) = adot *window
+                    
+                    !ARF
+                    RedWin%wingz(j) = adot*window*z
 
                     !Window with 1/H in
                     RedWin%wing2(j) = RedWin%wing(j)/(adot/a)
@@ -2485,7 +2502,7 @@
                     !winv is g/chi for the ISW and time delay terms
                     RedWin%WinV(j) = 0
                     if (tau < State%tau0 -0.1) then
-                        int_tmp(j,i) = RedWin%wing(j)/(State%tau0 - tau)
+                        int_tmp(j,i) = RedWin%wing(j)/(State%tau0 - tau) 
                     else
                         int_tmp(j,i)=0
                     end if
@@ -2501,14 +2518,49 @@
                 end if
             end associate
         end do
-    end do
+    end do    
+    
+    !ARF ------------------------------------- 
+    do j=jstart, TimeSteps%npoints
+        tau = TimeSteps%points(j)
+        z = this%step_redshift(j)
+        a = 1._dl/(1._dl+z)
+        a2=a**2
+        adot=1._dl/dtauda(State,a)
+    
+    	do i = 1, State%num_redshiftwindows
+            associate (RedWin => State%Redshift_W(i))
+                if (tau < RedWin%tau_start) cycle
+
+                !
+		if (RedWin%kind == window_arf) then ! [CHM] Only for window_arf
+		    RedWin%z_prom=sum(RedWin%wingz(jstart:TimeSteps%npoints))/sum(RedWin%wing(jstart:TimeSteps%npoints))  
+
+                    if (tau < State%tau0 -0.1) then
+                        int_tmpZ(j,i) = RedWin%wing(j)/(State%tau0 - tau) * (z-RedWin%z_prom) !ARF
+                    else
+                        int_tmpZ(j,i)=0 
+                   end if
+
+		endif       
+            end associate
+    	enddo
+    		
+    enddo
+    !ARF -------------------------------------
 
     do i = 1, State%num_redshiftwindows
         associate (RedWin => State%Redshift_W(i))
 
             ! int (a*rho_s/H)' a W_f(a) d\eta, or for counts int g/chi deta
-            call spline(TimeSteps%points(jstart),int_tmp(jstart,i),ninterp,spl_large,spl_large,tmp)
-            call spline_integrate(TimeSteps%points(jstart),int_tmp(jstart,i),tmp, tmp2(jstart),ninterp)
+            if (RedWin%kind == window_arf) then ! [CHM] Only for window_arf
+            	call spline(TimeSteps%points(jstart),int_tmpZ(jstart,i),ninterp,spl_large,spl_large,tmp)
+            	call spline_integrate(TimeSteps%points(jstart),int_tmpZ(jstart,i),tmp, tmp2(jstart),ninterp)
+            else
+            	call spline(TimeSteps%points(jstart),int_tmp(jstart,i),ninterp,spl_large,spl_large,tmp)
+            	call spline_integrate(TimeSteps%points(jstart),int_tmp(jstart,i),tmp, tmp2(jstart),ninterp)
+            endif
+
             RedWin%WinV(jstart:TimeSteps%npoints) =  &
                 RedWin%WinV(jstart:TimeSteps%npoints) + tmp2(jstart:TimeSteps%npoints)
 
@@ -2523,7 +2575,19 @@
                 RedWin%dWing2(jstart), ninterp)
 
             call spline_integrate(TimeSteps%points(jstart),RedWin%Wing(jstart),RedWin%ddWing(jstart), RedWin%WinF(jstart),ninterp)
-            RedWin%Fq = RedWin%WinF(TimeSteps%npoints)
+            RedWin%Fq = RedWin%WinF(TimeSteps%npoints) 
+
+            !ARF----------------------------------------------------
+            !call spline_integrate(TimeSteps%points(jstart),RedWin%Wing(jstart),RedWin%ddWing(jstart), RedWin%WinF2(jstart),ninterp)
+            !RedWin%Fq = RedWin%WinF2(TimeSteps%npoints) ! [CHM] I am afraid these lines are useless, since Fq is barely used, and only for 21cm
+	    !
+	    if (RedWin%kind == window_arf) then 
+            	print*,'V3 ARF, window_i, z_prom = ',i,RedWin%z_prom 
+            else
+            	print*,'V3 ADF, window_i = ',i
+            endif
+            !ARF------------------------------------------------------
+
 
             if (RedWin%kind == window_21cm) then
                 call spline_integrate(TimeSteps%points(jstart),RedWin%Wing2(jstart),&
@@ -2534,20 +2598,21 @@
                 call spline(TimeSteps%points(jstart),RedWin%Wingtau(jstart),ninterp,spl_large,spl_large,RedWin%ddWingtau(jstart))
                 call spline_deriv(TimeSteps%points(jstart),RedWin%Wingtau(jstart),RedWin%ddWingtau(jstart), &
                     RedWin%dWingtau(jstart), ninterp)
-            elseif (RedWin%kind == window_counts) then
-
-                if (State%CP%SourceTerms%counts_evolve) then
+            elseif ( (RedWin%kind == window_counts) .or. (RedWin%kind == window_arf) ) then
+                if (State%CP%SourceTerms%counts_evolve) then ! [CHM] For ARF we assume there's no source evolution since we need a "perfect" Gaussian dNdz
                     call spline(TimeSteps%points(jstart),back_count_tmp(jstart,i),ninterp,spl_large,spl_large,tmp)
                     call spline_deriv(TimeSteps%points(jstart),back_count_tmp(jstart,i),tmp,tmp2(jstart),ninterp)
                     do ix = jstart, TimeSteps%npoints
                         if (RedWin%Wing(ix)==0._dl) then
                             RedWin%Wingtau(ix) = 0
+                            RedWin%WingtauZ(ix) = 0
                         else
                             !evo bias is computed with total derivative
                             RedWin%Wingtau(ix) =  -tmp2(ix) * RedWin%Wing(ix) / (back_count_tmp(ix,i)*hubble_tmp(ix)) &
                                 !+ 5*RedWin%dlog10Ndm * ( RedWin%Wing(ix)- int_tmp(ix,i)/hubble_tmp(ix))
                                 !The correction from total to partial derivative takes 1/adot(tau0-tau) cancels
-                                + 10*RedWin%Window%dlog10Ndm * RedWin%Wing(ix)
+                                + 10*RedWin%Window%dlog10Ndm * RedWin%Wing(ix) + RedWin%Wing(ix)
+                            RedWin%WingtauZ(ix) = RedWin%Wingtau(ix)  * (this%step_redshift(ix)-RedWin%z_prom)
                         end if
                     end do
 
@@ -2564,10 +2629,10 @@
                         end if
                     end do
                 else
+
                     RedWin%comoving_density_ev=0
                     call spline(TimeSteps%points(jstart),hubble_tmp(jstart),ninterp,spl_large,spl_large,tmp)
                     call spline_deriv(TimeSteps%points(jstart),hubble_tmp(jstart),tmp, tmp2(jstart), ninterp)
-
                     !assume d( a^3 n_s) of background population is zero, so remaining terms are
                     !wingtau =  g*(2/H\chi + Hdot/H^2)  when s=0; int_tmp = window/chi
                     RedWin%Wingtau(jstart:TimeSteps%npoints) = &
@@ -2576,16 +2641,28 @@
                         + 5*RedWin%Window%dlog10Ndm*RedWin%Wing(jstart:TimeSteps%npoints) &
                         + tmp2(jstart:TimeSteps%npoints)/hubble_tmp(jstart:TimeSteps%npoints)**2 &
                         *RedWin%Wing(jstart:TimeSteps%npoints)
+                    RedWin%WingtauZ(jstart:TimeSteps%npoints) = RedWin%Wingtau(jstart:TimeSteps%npoints) * &
+                    	 (this%step_redshift(jstart:TimeSteps%npoints)-RedWin%z_prom) !ARF
                 endif
 
-                call spline(TimeSteps%points(jstart),RedWin%Wingtau(jstart),ninterp, &
-                    spl_large,spl_large,RedWin%ddWingtau(jstart))
-                call spline_deriv(TimeSteps%points(jstart),RedWin%Wingtau(jstart),RedWin%ddWingtau(jstart), &
-                    RedWin%dWingtau(jstart), ninterp)
+                if (RedWin%kind == window_arf) then ![CHM] Only for ARF
 
+	               call spline(TimeSteps%points(jstart),RedWin%WingtauZ(jstart),ninterp, &
+        	            spl_large,spl_large,RedWin%ddWingtau(jstart))
+        	       call spline_deriv(TimeSteps%points(jstart),RedWin%WingtauZ(jstart),RedWin%ddWingtau(jstart), &
+        	            RedWin%dWingtau(jstart), ninterp)
                 !WinF is int[ g*(...)]
-                call spline_integrate(TimeSteps%points(jstart),RedWin%Wingtau(jstart),&
-                    RedWin%ddWingtau(jstart), RedWin%WinF(jstart),ninterp)
+         	       call spline_integrate(TimeSteps%points(jstart),RedWin%WingtauZ(jstart),& ! ARF
+         	           RedWin%ddWingtau(jstart), RedWin%WinF(jstart),ninterp)
+         	elseif (RedWin%kind == window_counts) then ! [CHM] only for ADF
+	                call spline(TimeSteps%points(jstart),RedWin%Wingtau(jstart),ninterp, &
+        	            spl_large,spl_large,RedWin%ddWingtau(jstart))
+        	        call spline_deriv(TimeSteps%points(jstart),RedWin%Wingtau(jstart),RedWin%ddWingtau(jstart), &
+        	            RedWin%dWingtau(jstart), ninterp)
+                !WinF is int[ g*(...)]
+        	        call spline_integrate(TimeSteps%points(jstart),RedWin%Wingtau(jstart),&
+        	            RedWin%ddWingtau(jstart), RedWin%WinF(jstart),ninterp)
+         	endif 
             end if
         end associate
     end do
@@ -2653,6 +2730,10 @@
                     W%win_lens(j2) = C%awin_lens(i)+d*(C%dawin_lens(i)+d*(3._dl*(C%awin_lens(i+1)-C%awin_lens(i)) &
                         -2._dl*C%dawin_lens(i)-C%dawin_lens(i+1)+d*(C%dawin_lens(i)+C%dawin_lens(i+1) &
                         +2._dl*(C%awin_lens(i)-C%awin_lens(i+1)))))
+                    W%win_lensZ(j2)= C%awin_lensZ(i)+d*(C%dawin_lensZ(i)+d*(3._dl*(C%awin_lensZ(i+1)-C%awin_lensZ(i)) &
+                        -2._dl*C%dawin_lensZ(i)-C%dawin_lensZ(i+1)+d*(C%dawin_lensZ(i)+C%dawin_lensZ(i+1) &
+                        +2._dl*(C%awin_lensZ(i)-C%awin_lensZ(i+1))))) ! ARF
+                    W%z_prom=C%z_prom
                 end associate
             end if
         end do
@@ -2664,6 +2745,7 @@
         do RW_i=1, State%num_redshiftwindows
             associate (W => State%Redshift_W(RW_i))
                 W%win_lens(j2)=0
+                W%win_lensZ(j2)=0 ! ARF
             end associate
         end do
     end if

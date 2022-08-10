@@ -292,6 +292,8 @@
                 RedWin%source_type = window_21cm
             elseif (S == 'counts') then
                 RedWin%source_type = window_counts
+            elseif (S == 'arf') then
+                RedWin%source_type = window_arf
             elseif (S == 'lensing') then
                 RedWin%source_type = window_lensing
             else
