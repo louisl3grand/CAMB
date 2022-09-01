@@ -3,6 +3,8 @@ import numpy as np
 import itertools
 import sys
 import time
+import matplotlib.pyplot as plt
+
 
 def enumerate_progress(list, label=''):
     """Simple progress bar.
@@ -24,6 +26,10 @@ def enumerate_progress(list, label=''):
             sys.stdout.flush()
     sys.stdout.write("\n")
     sys.stdout.flush()
+
+def is_pos_def(x):
+    return np.all(np.linalg.eigvals(x) > 0)
+
 
 def get_cov(ells, dell, cls_fid, cl_keys, sig_eps, ng_i, fsky = 0.363609919):
     cov_tot = []
@@ -69,7 +75,20 @@ def get_cov(ells, dell, cls_fid, cl_keys, sig_eps, ng_i, fsky = 0.363609919):
     return cov_tot, invcov_l
 
 
+def plot_pn(ells, cl, ax=None, **kwargs):
+    if ax is None: ax = plt.gca()
+    is_pos = np.where(cl[ells]>0)
+    is_neg =np.where(cl[ells]<0)
+    p = ax.plot(ells[is_pos], cl[ells][is_pos],  **kwargs)
+    ax.plot(ells[is_neg], -cl[ells][is_neg], ls='--', color=p[0].get_color())
 
+
+def cov_to_corr(covariance):
+    v = np.sqrt(np.diag(covariance))
+    outer_v = np.outer(v, v)
+    correlation = covariance / outer_v
+    correlation[covariance == 0] = 0
+    return correlation
 
 def get_fisher(ells, params, cls_dpar_p, cls_dpar_m, delta_par, invcov_l, cl_keys):
     print(cl_keys)

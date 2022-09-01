@@ -71,6 +71,24 @@ class cacher_mem(cacher):
         assert fn in self._cache.keys()
         del self._cache[fn]
 
+class cacher_dict_mem(cacher):
+    def __init__(self):
+        self._cache = dict()
+
+    def cache(self, fn, obj):
+        # print(type(obj))
+        self._cache[fn] = obj
+
+    def load(self, fn):
+        assert fn in self._cache.keys()
+        return self._cache[fn]
+
+    def is_cached(self, fn):
+        return fn in self._cache.keys()
+
+    def remove(self, fn):
+        assert fn in self._cache.keys()
+        del self._cache[fn]
 
 class cacher_pk(object):
     def __init__(self, lib_dir, verbose=False):
