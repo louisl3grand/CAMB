@@ -3,6 +3,8 @@ import numpy as np
 import itertools
 import sys
 import time
+
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 
 
@@ -109,3 +111,35 @@ def get_fisher(ells, params, cls_dpar_p, cls_dpar_m, delta_par, invcov_l, cl_key
             fisher[i1, i2] += np.dot(np.dot(dcls_dpar[par1][ell], invcov_l[il]), dcls_dpar[par2][ell])  
     fisher = fisher + fisher.T - np.diag(fisher.diagonal())    
     return fisher, dcls_dpar
+
+
+
+latex_names = {
+    'logA':r'\log(10^{10} A_\mathrm{s})',
+    'As':r'A_\mathrm{s}',
+    'ns': r'n_\mathrm{s}', 
+    'theta_MC_100':r'100\theta_\mathrm{MC}', 
+    'cosmomc_theta':r'\theta_\mathrm{MC}', 
+    'ombh2':r'\Omega_\mathrm{b} h^2', 
+    'omch2':r'\Omega_\mathrm{c} h^2', 
+    'tau':r'\tau_\mathrm{reio}', 
+    'mnu':r'\sum m_\nu', 
+    'omk':r'\Omega_k', 
+    'w':r'w_0',
+    'wa':r'w_\mathrm{a}',
+    'H0':r'H_0'
+}
+
+
+def set_mpl():
+    mpl.rcParams['axes.labelsize'] = 20
+    mpl.rcParams['font.size'] = 20
+    # mpl.rcParams['figure.figsize'] = 6.4, 4.8
+    mpl.rcParams['figure.figsize'] = 8.5, 5.5
+
+    mpl.rcParams['mathtext.fontset'] = 'cm'
+    mpl.rcParams['mathtext.rm'] = 'serif'
+    mpl.rc('text', usetex=True)
+    # mpl.rcParams['text.latex.preamble'] = [r"\usepackage{amsmath}"]
+    mpl.rcParams['errorbar.capsize'] = 4
+    mpl.rc('legend', fontsize=15)
